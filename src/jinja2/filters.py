@@ -3,7 +3,6 @@
 import math
 import random
 import re
-import typing
 import typing as t
 from collections import abc
 from inspect import getattr_static
@@ -53,6 +52,16 @@ def ignore_case(value: V) -> V:
         return t.cast(V, value.lower())
 
     return value
+
+
+def _case_postprocess(
+    case_sensitive: bool,
+) -> t.Callable[[t.Any], t.Any] | None:
+    """Return :func:`ignore_case` as a postprocessor when ``case_sensitive``
+    is ``False``, otherwise return ``None``.  Use this as the ``postprocess``
+    argument for :func:`make_attrgetter` / :func:`make_multi_attrgetter` in
+    filters that accept a ``case_sensitive`` parameter."""
+    return None if case_sensitive else ignore_case
 
 
 def make_attrgetter(
@@ -433,7 +442,7 @@ def do_sort(
        The ``attribute`` parameter was added.
     """
     key_func = make_multi_attrgetter(
-        environment, attribute, postprocess=ignore_case if not case_sensitive else None
+        environment, attribute, postprocess=_case_postprocess(case_sensitive)
     )
     return sorted(value, key=key_func, reverse=reverse)
 
@@ -459,7 +468,7 @@ def sync_do_unique(
     :param attribute: Filter objects with unique values for this attribute.
     """
     getter = make_attrgetter(
-        environment, attribute, postprocess=ignore_case if not case_sensitive else None
+        environment, attribute, postprocess=_case_postprocess(case_sensitive)
     )
     seen = set()
 
@@ -498,7 +507,7 @@ def _min_or_max(
         return environment.undefined("No aggregated item, sequence was empty.")
 
     key_func = make_attrgetter(
-        environment, attribute, postprocess=ignore_case if not case_sensitive else None
+        environment, attribute, postprocess=_case_postprocess(case_sensitive)
     )
     return func(chain([first], it), key=key_func)
 
@@ -697,6 +706,11 @@ def do_random(context: "Context", seq: "t.Sequence[V]") -> "V | Undefined":
         return context.environment.undefined("No random item, sequence was empty.")
 
 
+# Prefix lists used by :func:`do_filesizeformat`.
+_BINARY_PREFIXES = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"]
+_DECIMAL_PREFIXES = ["kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"]
+
+
 def do_filesizeformat(value: str | float | int, binary: bool = False) -> str:
     """Format the value like a 'human-readable' file size (i.e. 13 kB,
     4.1 MB, 102 Bytes, etc).  Per default decimal prefixes are used (Mega,
@@ -705,16 +719,7 @@ def do_filesizeformat(value: str | float | int, binary: bool = False) -> str:
     """
     bytes = float(value)
     base = 1024 if binary else 1000
-    prefixes = [
-        ("KiB" if binary else "kB"),
-        ("MiB" if binary else "MB"),
-        ("GiB" if binary else "GB"),
-        ("TiB" if binary else "TB"),
-        ("PiB" if binary else "PB"),
-        ("EiB" if binary else "EB"),
-        ("ZiB" if binary else "ZB"),
-        ("YiB" if binary else "YB"),
-    ]
+    prefixes = _BINARY_PREFIXES if binary else _DECIMAL_PREFIXES
 
     if bytes == 1:
         return "1 Byte"
@@ -1262,7 +1267,7 @@ def sync_do_groupby(
     expr = make_attrgetter(
         environment,
         attribute,
-        postprocess=ignore_case if not case_sensitive else None,
+        postprocess=_case_postprocess(case_sensitive),
         default=default,
     )
     out = [
@@ -1289,7 +1294,7 @@ async def do_groupby(
     expr = make_attrgetter(
         environment,
         attribute,
-        postprocess=ignore_case if not case_sensitive else None,
+        postprocess=_case_postprocess(case_sensitive),
         default=default,
     )
     out = [
@@ -1378,11 +1383,11 @@ def do_mark_unsafe(value: str) -> str:
     return str(value)
 
 
-@typing.overload
+@t.overload
 def do_reverse(value: str) -> str: ...
 
 
-@typing.overload
+@t.overload
 def do_reverse(value: "t.Iterable[V]") -> "t.Iterable[V]": ...
 
 
@@ -1427,7 +1432,7 @@ def do_attr(environment: "Environment", obj: t.Any, name: str) -> Undefined | t.
     return environment.getattr(obj, name)
 
 
-@typing.overload
+@t.overload
 def sync_do_map(
     context: "Context",
     value: t.Iterable[t.Any],
@@ -1437,7 +1442,7 @@ def sync_do_map(
 ) -> t.Iterable[t.Any]: ...
 
 
-@typing.overload
+@t.overload
 def sync_do_map(
     context: "Context",
     value: t.Iterable[t.Any],
@@ -1497,7 +1502,7 @@ def sync_do_map(
             yield func(item)
 
 
-@typing.overload
+@t.overload
 def do_map(
     context: "Context",
     value: t.AsyncIterable[t.Any] | t.Iterable[t.Any],
@@ -1507,7 +1512,7 @@ def do_map(
 ) -> t.Iterable[t.Any]: ...
 
 
-@typing.overload
+@t.overload
 def do_map(
     context: "Context",
     value: t.AsyncIterable[t.Any] | t.Iterable[t.Any],
