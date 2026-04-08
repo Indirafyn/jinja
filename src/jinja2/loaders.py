@@ -225,19 +225,30 @@ class FileSystemLoader(BaseLoader):
         # Use normpath to convert Windows altsep to sep.
         return contents, os.path.normpath(filename), uptodate
 
+    @staticmethod
+    def _normalize_template_name(
+        base_path: str, dirpath: str, filename: str
+    ) -> str:
+        # Refactoring (Extract Method): moved path normalization logic out of
+        # list_templates to keep nested loops focused on traversal.
+        template = (
+            os.path.join(dirpath, filename)[len(base_path) :]
+            .strip(os.sep)
+            .replace(os.sep, "/")
+        )
+        if template[:2] == "./":
+            template = template[2:]
+        return template
+
     def list_templates(self) -> list[str]:
         found = set()
         for searchpath in self.searchpath:
             walk_dir = os.walk(searchpath, followlinks=self.followlinks)
             for dirpath, _, filenames in walk_dir:
                 for filename in filenames:
-                    template = (
-                        os.path.join(dirpath, filename)[len(searchpath) :]
-                        .strip(os.sep)
-                        .replace(os.sep, "/")
+                    template = self._normalize_template_name(
+                        searchpath, dirpath, filename
                     )
-                    if template[:2] == "./":
-                        template = template[2:]
                     if template not in found:
                         found.add(template)
         return sorted(found)
@@ -523,6 +534,12 @@ class PrefixLoader(BaseLoader):
             raise TemplateNotFound(template) from e
         return loader, name
 
+    @staticmethod
+    def _reraise_template_not_found(template: str, e: TemplateNotFound) -> t.NoReturn:
+        # Refactoring (Consolidate Duplicate Code): centralized TemplateNotFound
+        # re-wrapping for both get_source and load.
+        raise TemplateNotFound(template) from e
+
     def get_source(
         self, environment: "Environment", template: str
     ) -> tuple[str, str | None, t.Callable[[], bool] | None]:
@@ -530,9 +547,7 @@ class PrefixLoader(BaseLoader):
         try:
             return loader.get_source(environment, name)
         except TemplateNotFound as e:
-            # re-raise the exception with the correct filename here.
-            # (the one that includes the prefix)
-            raise TemplateNotFound(template) from e
+            self._reraise_template_not_found(template, e)
 
     @internalcode
     def load(
@@ -545,9 +560,7 @@ class PrefixLoader(BaseLoader):
         try:
             return loader.load(environment, local_name, globals)
         except TemplateNotFound as e:
-            # re-raise the exception with the correct filename here.
-            # (the one that includes the prefix)
-            raise TemplateNotFound(name) from e
+            self._reraise_template_not_found(name, e)
 
     def list_templates(self) -> list[str]:
         result = []
@@ -574,15 +587,24 @@ class ChoiceLoader(BaseLoader):
     def __init__(self, loaders: t.Sequence[BaseLoader]) -> None:
         self.loaders = loaders
 
+    def _dispatch_to_first_match(
+        self, name: str, action: t.Callable[[BaseLoader], t.Any]
+    ) -> t.Any:
+        # Refactoring (Consolidate Duplicate Code): shared fallback iteration
+        # replaces duplicate loader loops in get_source and load.
+        for loader in self.loaders:
+            try:
+                return action(loader)
+            except TemplateNotFound:
+                pass
+        raise TemplateNotFound(name)
+
     def get_source(
         self, environment: "Environment", template: str
     ) -> tuple[str, str | None, t.Callable[[], bool] | None]:
-        for loader in self.loaders:
-            try:
-                return loader.get_source(environment, template)
-            except TemplateNotFound:
-                pass
-        raise TemplateNotFound(template)
+        return self._dispatch_to_first_match(
+            template, lambda loader: loader.get_source(environment, template)
+        )
 
     @internalcode
     def load(
@@ -591,12 +613,9 @@ class ChoiceLoader(BaseLoader):
         name: str,
         globals: t.MutableMapping[str, t.Any] | None = None,
     ) -> "Template":
-        for loader in self.loaders:
-            try:
-                return loader.load(environment, name, globals)
-            except TemplateNotFound:
-                pass
-        raise TemplateNotFound(name)
+        return self._dispatch_to_first_match(
+            name, lambda loader: loader.load(environment, name, globals)
+        )
 
     def list_templates(self) -> list[str]:
         found = set()
