@@ -558,13 +558,13 @@ class LoopContext:
     def __iter__(self) -> "LoopContext":
         return self
 
-    def _update_iteration_state(self, rv: t.Any) -> tuple[t.Any, "LoopContext"]:
+    def _update_iteration_state(self, rv: t.Any) -> t.Any:
         # Refactoring (Pull Up Common Logic): shared state transition is reused
         # by __next__ and AsyncLoopContext.__anext__.
         self.index0 += 1
         self._before = self._current
         self._current = rv
-        return rv, self
+        return rv
 
     def __next__(self) -> tuple[t.Any, "LoopContext"]:
         if self._after is not missing:
@@ -573,7 +573,7 @@ class LoopContext:
         else:
             rv = next(self._iterator)
 
-        return self._update_iteration_state(rv)
+        return self._update_iteration_state(rv), self
 
     @internalcode
     def __call__(self, iterable: t.Iterable[V]) -> str:
@@ -657,8 +657,7 @@ class AsyncLoopContext(LoopContext):
             self._after = missing
         else:
             rv = await self._iterator.__anext__()
-        value, _ = self._update_iteration_state(rv)
-        return value, self
+        return self._update_iteration_state(rv), self
 
 
 class Macro:

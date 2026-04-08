@@ -247,7 +247,8 @@ class FileSystemLoader(BaseLoader):
                     template = self._normalize_template_name(
                         searchpath, dirpath, filename
                     )
-                    found.add(template)
+                    if template not in found:
+                        found.add(template)
         return sorted(found)
 
 
