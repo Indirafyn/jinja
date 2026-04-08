@@ -720,14 +720,20 @@ class Macro:
         else:
             found_caller = self.explicit_caller
 
+        self._inject_caller_argument(arguments, kwargs, found_caller)
+        self._append_remainder_arguments(arguments, args, kwargs)
+        return arguments
+
+    def _inject_caller_argument(
+        self, arguments: list[t.Any], kwargs: dict[str, t.Any], found_caller: bool
+    ) -> None:
+        # Refactoring (Extract Method): split caller-injection branch from
+        # _collect_arguments to reduce branching in that method.
         if self.caller and not found_caller:
             caller = kwargs.pop("caller", None)
             if caller is None:
                 caller = self._environment.undefined("No caller defined", name="caller")
             arguments.append(caller)
-
-        self._append_remainder_arguments(arguments, args, kwargs)
-        return arguments
 
     def _append_remainder_arguments(
         self, arguments: list[t.Any], args: tuple[t.Any, ...], kwargs: dict[str, t.Any]

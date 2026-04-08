@@ -226,11 +226,13 @@ class FileSystemLoader(BaseLoader):
         return contents, os.path.normpath(filename), uptodate
 
     @staticmethod
-    def _normalize_template_name(searchpath: str, dirpath: str, filename: str) -> str:
+    def _normalize_template_name(
+        base_path: str, dirpath: str, filename: str
+    ) -> str:
         # Refactoring (Extract Method): moved path normalization logic out of
         # list_templates to keep nested loops focused on traversal.
         template = (
-            os.path.join(dirpath, filename)[len(searchpath) :]
+            os.path.join(dirpath, filename)[len(base_path) :]
             .strip(os.sep)
             .replace(os.sep, "/")
         )
@@ -533,7 +535,7 @@ class PrefixLoader(BaseLoader):
         return loader, name
 
     @staticmethod
-    def _raise_with_prefixed_name(template: str, e: TemplateNotFound) -> t.NoReturn:
+    def _reraise_template_not_found(template: str, e: TemplateNotFound) -> t.NoReturn:
         # Refactoring (Consolidate Duplicate Code): centralized TemplateNotFound
         # re-wrapping for both get_source and load.
         raise TemplateNotFound(template) from e
@@ -545,7 +547,7 @@ class PrefixLoader(BaseLoader):
         try:
             return loader.get_source(environment, name)
         except TemplateNotFound as e:
-            self._raise_with_prefixed_name(template, e)
+            self._reraise_template_not_found(template, e)
 
     @internalcode
     def load(
@@ -558,7 +560,7 @@ class PrefixLoader(BaseLoader):
         try:
             return loader.load(environment, local_name, globals)
         except TemplateNotFound as e:
-            self._raise_with_prefixed_name(name, e)
+            self._reraise_template_not_found(name, e)
 
     def list_templates(self) -> list[str]:
         result = []
