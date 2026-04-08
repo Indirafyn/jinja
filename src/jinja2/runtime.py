@@ -365,16 +365,20 @@ class BlockReference:
             )
         return BlockReference(self.name, self._context, self._stack, self._depth + 1)
 
+    def _finalize_render_result(self, rv: str) -> str:
+        # Refactoring (Extract Method): share post-processing logic used by
+        # both synchronous and asynchronous block calls.
+        if self._context.eval_ctx.autoescape:
+            return Markup(rv)
+
+        return rv
+
     @internalcode
     async def _async_call(self) -> str:
         rv = self._context.environment.concat(  # type: ignore
             [x async for x in self._stack[self._depth](self._context)]  # type: ignore
         )
-
-        if self._context.eval_ctx.autoescape:
-            return Markup(rv)
-
-        return rv
+        return self._finalize_render_result(rv)
 
     @internalcode
     def __call__(self) -> str:
@@ -384,11 +388,7 @@ class BlockReference:
         rv = self._context.environment.concat(  # type: ignore
             self._stack[self._depth](self._context)
         )
-
-        if self._context.eval_ctx.autoescape:
-            return Markup(rv)
-
-        return rv
+        return self._finalize_render_result(rv)
 
 
 class LoopContext:
@@ -558,6 +558,14 @@ class LoopContext:
     def __iter__(self) -> "LoopContext":
         return self
 
+    def _update_iteration_state(self, rv: t.Any) -> tuple[t.Any, "LoopContext"]:
+        # Refactoring (Pull Up Common Logic): shared state transition is reused
+        # by __next__ and AsyncLoopContext.__anext__.
+        self.index0 += 1
+        self._before = self._current
+        self._current = rv
+        return rv, self
+
     def __next__(self) -> tuple[t.Any, "LoopContext"]:
         if self._after is not missing:
             rv = self._after
@@ -565,10 +573,7 @@ class LoopContext:
         else:
             rv = next(self._iterator)
 
-        self.index0 += 1
-        self._before = self._current
-        self._current = rv
-        return rv, self
+        return self._update_iteration_state(rv)
 
     @internalcode
     def __call__(self, iterable: t.Iterable[V]) -> str:
@@ -652,11 +657,8 @@ class AsyncLoopContext(LoopContext):
             self._after = missing
         else:
             rv = await self._iterator.__anext__()
-
-        self.index0 += 1
-        self._before = self._current
-        self._current = rv
-        return rv, self
+        value, _ = self._update_iteration_state(rv)
+        return value, self
 
 
 class Macro:
@@ -691,6 +693,64 @@ class Macro:
 
         self._default_autoescape = default_autoescape
 
+    def _resolve_autoescape(self, args: tuple[t.Any, ...]) -> tuple[bool, tuple[t.Any, ...]]:
+        # Refactoring (Extract Method): extracted eval-context unwrapping from
+        # __call__ to simplify macro invocation control flow.
+        if args and isinstance(args[0], EvalContext):
+            return args[0].autoescape, args[1:]
+
+        return self._default_autoescape, args
+
+    def _collect_arguments(
+        self, args: tuple[t.Any, ...], kwargs: dict[str, t.Any]
+    ) -> list[t.Any]:
+        # Refactoring (Extract Method): moved argument binding and validation
+        # out of __call__ into focused helpers.
+        arguments = list(args[: self._argument_count])
+        off = len(arguments)
+        found_caller = False
+
+        if off != self._argument_count:
+            for name in self.arguments[len(arguments) :]:
+                value = kwargs.pop(name, missing)
+                if name == "caller":
+                    found_caller = True
+                arguments.append(value)
+        else:
+            found_caller = self.explicit_caller
+
+        if self.caller and not found_caller:
+            caller = kwargs.pop("caller", None)
+            if caller is None:
+                caller = self._environment.undefined("No caller defined", name="caller")
+            arguments.append(caller)
+
+        self._append_remainder_arguments(arguments, args, kwargs)
+        return arguments
+
+    def _append_remainder_arguments(
+        self, arguments: list[t.Any], args: tuple[t.Any, ...], kwargs: dict[str, t.Any]
+    ) -> None:
+        if self.catch_kwargs:
+            arguments.append(kwargs)
+        elif kwargs:
+            if "caller" in kwargs:
+                raise TypeError(
+                    f"macro {self.name!r} was invoked with two values for the special"
+                    " caller argument. This is most likely a bug."
+                )
+            raise TypeError(
+                f"macro {self.name!r} takes no keyword argument {next(iter(kwargs))!r}"
+            )
+
+        if self.catch_varargs:
+            arguments.append(args[self._argument_count :])
+        elif len(args) > self._argument_count:
+            raise TypeError(
+                f"macro {self.name!r} takes not more than"
+                f" {len(self.arguments)} argument(s)"
+            )
+
     @internalcode
     @pass_eval_context
     def __call__(self, *args: t.Any, **kwargs: t.Any) -> str:
@@ -710,63 +770,8 @@ class Macro:
         # argument to callables otherwise anyway.  Worst case here is
         # that if no eval context is passed we fall back to the compile
         # time autoescape flag.
-        if args and isinstance(args[0], EvalContext):
-            autoescape = args[0].autoescape
-            args = args[1:]
-        else:
-            autoescape = self._default_autoescape
-
-        # try to consume the positional arguments
-        arguments = list(args[: self._argument_count])
-        off = len(arguments)
-
-        # For information why this is necessary refer to the handling
-        # of caller in the `macro_body` handler in the compiler.
-        found_caller = False
-
-        # if the number of arguments consumed is not the number of
-        # arguments expected we start filling in keyword arguments
-        # and defaults.
-        if off != self._argument_count:
-            for name in self.arguments[len(arguments) :]:
-                try:
-                    value = kwargs.pop(name)
-                except KeyError:
-                    value = missing
-                if name == "caller":
-                    found_caller = True
-                arguments.append(value)
-        else:
-            found_caller = self.explicit_caller
-
-        # it's important that the order of these arguments does not change
-        # if not also changed in the compiler's `function_scoping` method.
-        # the order is caller, keyword arguments, positional arguments!
-        if self.caller and not found_caller:
-            caller = kwargs.pop("caller", None)
-            if caller is None:
-                caller = self._environment.undefined("No caller defined", name="caller")
-            arguments.append(caller)
-
-        if self.catch_kwargs:
-            arguments.append(kwargs)
-        elif kwargs:
-            if "caller" in kwargs:
-                raise TypeError(
-                    f"macro {self.name!r} was invoked with two values for the special"
-                    " caller argument. This is most likely a bug."
-                )
-            raise TypeError(
-                f"macro {self.name!r} takes no keyword argument {next(iter(kwargs))!r}"
-            )
-        if self.catch_varargs:
-            arguments.append(args[self._argument_count :])
-        elif len(args) > self._argument_count:
-            raise TypeError(
-                f"macro {self.name!r} takes not more than"
-                f" {len(self.arguments)} argument(s)"
-            )
-
+        autoescape, args = self._resolve_autoescape(args)
+        arguments = self._collect_arguments(args, kwargs)
         return self._invoke(arguments, autoescape)
 
     async def _async_invoke(self, arguments: list[t.Any], autoescape: bool) -> str:
