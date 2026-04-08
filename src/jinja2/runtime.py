@@ -693,7 +693,9 @@ class Macro:
 
         self._default_autoescape = default_autoescape
 
-    def _resolve_autoescape(self, args: tuple[t.Any, ...]) -> tuple[bool, tuple[t.Any, ...]]:
+    def _resolve_autoescape(
+        self, args: tuple[t.Any, ...]
+    ) -> tuple[bool, tuple[t.Any, ...]]:
         # Refactoring (Extract Method): extracted eval-context unwrapping from
         # __call__ to simplify macro invocation control flow.
         if args and isinstance(args[0], EvalContext):
