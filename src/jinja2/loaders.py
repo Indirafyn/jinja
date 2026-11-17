@@ -266,6 +266,41 @@ else:
         return files  # type: ignore[no-any-return]
 
 
+def _resolve_package_root(
+    spec: t.Any, package_name: str, package_path: str
+) -> tuple[str | None, str]:
+    # Refactoring: isolate package-root and archive resolution.
+    loader = spec.loader
+    assert loader is not None, "A loader was not found for the package."
+
+    if isinstance(loader, zipimport.zipimporter):
+        archive = loader.archive
+        pkgdir = next(iter(spec.submodule_search_locations))
+        return archive, os.path.join(pkgdir, package_path).rstrip(os.sep)
+
+    roots: list[str] = []
+    if spec.submodule_search_locations:
+        roots.extend(spec.submodule_search_locations)
+    elif spec.origin is not None:
+        roots.append(os.path.dirname(spec.origin))
+
+    if not roots:
+        raise ValueError(
+            f"The {package_name!r} package was not installed in a way that"
+            " PackageLoader understands."
+        )
+
+    for root in roots:
+        root = os.path.join(root, package_path)
+        if os.path.isdir(root):
+            return None, root
+
+    raise ValueError(
+        f"PackageLoader could not find a {package_path!r} directory"
+        f" in the {package_name!r} package."
+    )
+
+
 class PackageLoader(BaseLoader):
     """Load templates from a directory in a Python package.
 
@@ -325,42 +360,9 @@ class PackageLoader(BaseLoader):
         loader = spec.loader
         assert loader is not None, "A loader was not found for the package."
         self._loader = loader
-        self._archive = None
-
-        if isinstance(loader, zipimport.zipimporter):
-            self._archive = loader.archive
-            pkgdir = next(iter(spec.submodule_search_locations))  # type: ignore
-            template_root = os.path.join(pkgdir, package_path).rstrip(os.sep)
-        else:
-            roots: list[str] = []
-
-            # One element for regular packages, multiple for namespace
-            # packages, or None for single module file.
-            if spec.submodule_search_locations:
-                roots.extend(spec.submodule_search_locations)
-            # A single module file, use the parent directory instead.
-            elif spec.origin is not None:
-                roots.append(os.path.dirname(spec.origin))
-
-            if not roots:
-                raise ValueError(
-                    f"The {package_name!r} package was not installed in a"
-                    " way that PackageLoader understands."
-                )
-
-            for root in roots:
-                root = os.path.join(root, package_path)
-
-                if os.path.isdir(root):
-                    template_root = root
-                    break
-            else:
-                raise ValueError(
-                    f"PackageLoader could not find a {package_path!r} directory"
-                    f" in the {package_name!r} package."
-                )
-
-        self._template_root = template_root
+        self._archive, self._template_root = _resolve_package_root(
+            spec, package_name, package_path
+        )
 
     def get_source(
         self, environment: "Environment", template: str

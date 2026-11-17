@@ -850,29 +850,37 @@ class Environment:
         assert log_function is not None
         assert self.loader is not None, "No loader configured."
 
-        def write_file(filename: str, data: str) -> None:
-            if zip:
-                info = ZipInfo(filename)
-                info.external_attr = 0o755 << 16
-                zip_file.writestr(info, data)
-            else:
-                with open(os.path.join(target, filename), "wb") as f:
-                    f.write(data.encode("utf8"))
-
-        if zip is not None:
+        def setup_output() -> tuple[t.Callable[[str, str], None], t.Callable[[], None]]:
+            # Refactoring: isolate compile target setup and output writing.
             from zipfile import ZIP_DEFLATED
             from zipfile import ZIP_STORED
             from zipfile import ZipFile
             from zipfile import ZipInfo
 
-            zip_file = ZipFile(
-                target, "w", dict(deflated=ZIP_DEFLATED, stored=ZIP_STORED)[zip]
-            )
-            log_function(f"Compiling into Zip archive {target!r}")
-        else:
+            if zip is not None:
+                zip_file = ZipFile(
+                    target, "w", dict(deflated=ZIP_DEFLATED, stored=ZIP_STORED)[zip]
+                )
+                log_function(f"Compiling into Zip archive {target!r}")
+
+                def write_zip_file(filename: str, data: str) -> None:
+                    info = ZipInfo(filename)
+                    info.external_attr = 0o755 << 16
+                    zip_file.writestr(info, data)
+
+                return write_zip_file, zip_file.close
+
             if not os.path.isdir(target):
                 os.makedirs(target)
             log_function(f"Compiling into folder {target!r}")
+
+            def write_directory_file(filename: str, data: str) -> None:
+                with open(os.path.join(target, filename), "wb") as f:
+                    f.write(data.encode("utf8"))
+
+            return write_directory_file, lambda: None
+
+        write_file, close_output = setup_output()
 
         try:
             for name in self.list_templates(extensions, filter_func):
@@ -890,8 +898,7 @@ class Environment:
                 write_file(filename, code)
                 log_function(f'Compiled "{name}" as {filename}')
         finally:
-            if zip:
-                zip_file.close()
+            close_output()
 
         log_function("Finished compiling templates")
 

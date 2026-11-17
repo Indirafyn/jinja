@@ -615,45 +615,7 @@ class CodeGenerator(NodeVisitor):
         frame.symbols.analyze_node(node)
         macro_ref = MacroRef(node)
 
-        explicit_caller = None
-        skip_special_params = set()
-        args = []
-
-        for idx, arg in enumerate(node.args):
-            if arg.name == "caller":
-                explicit_caller = idx
-            if arg.name in ("kwargs", "varargs"):
-                skip_special_params.add(arg.name)
-            args.append(frame.symbols.ref(arg.name))
-
-        undeclared = find_undeclared(node.body, ("caller", "kwargs", "varargs"))
-
-        if "caller" in undeclared:
-            # In older Jinja versions there was a bug that allowed caller
-            # to retain the special behavior even if it was mentioned in
-            # the argument list.  However thankfully this was only really
-            # working if it was the last argument.  So we are explicitly
-            # checking this now and error out if it is anywhere else in
-            # the argument list.
-            if explicit_caller is not None:
-                try:
-                    node.defaults[explicit_caller - len(node.args)]
-                except IndexError:
-                    self.fail(
-                        "When defining macros or call blocks the "
-                        'special "caller" argument must be omitted '
-                        "or be given a default.",
-                        node.lineno,
-                    )
-            else:
-                args.append(frame.symbols.declare_parameter("caller"))
-            macro_ref.accesses_caller = True
-        if "kwargs" in undeclared and "kwargs" not in skip_special_params:
-            args.append(frame.symbols.declare_parameter("kwargs"))
-            macro_ref.accesses_kwargs = True
-        if "varargs" in undeclared and "varargs" not in skip_special_params:
-            args.append(frame.symbols.declare_parameter("varargs"))
-            macro_ref.accesses_varargs = True
+        args = self._get_macro_args(node, frame, macro_ref)
 
         # macros are delayed, they never require output checks
         frame.require_output_check = False
@@ -689,6 +651,46 @@ class CodeGenerator(NodeVisitor):
         self.outdent()
 
         return frame, macro_ref
+
+    def _get_macro_args(
+        self, node: nodes.Macro | nodes.CallBlock, frame: Frame, macro_ref: MacroRef
+    ) -> list[str]:
+        # Refactoring: isolate macro parameter and special-argument extraction.
+        explicit_caller = None
+        skip_special_params = set()
+        args = []
+
+        for idx, arg in enumerate(node.args):
+            if arg.name == "caller":
+                explicit_caller = idx
+            if arg.name in ("kwargs", "varargs"):
+                skip_special_params.add(arg.name)
+            args.append(frame.symbols.ref(arg.name))
+
+        undeclared = find_undeclared(node.body, ("caller", "kwargs", "varargs"))
+
+        if "caller" in undeclared:
+            if explicit_caller is not None:
+                try:
+                    node.defaults[explicit_caller - len(node.args)]
+                except IndexError:
+                    self.fail(
+                        "When defining macros or call blocks the "
+                        'special "caller" argument must be omitted '
+                        "or be given a default.",
+                        node.lineno,
+                    )
+            else:
+                args.append(frame.symbols.declare_parameter("caller"))
+            macro_ref.accesses_caller = True
+        if "kwargs" in undeclared and "kwargs" not in skip_special_params:
+            args.append(frame.symbols.declare_parameter("kwargs"))
+            macro_ref.accesses_kwargs = True
+        if "varargs" in undeclared and "varargs" not in skip_special_params:
+            args.append(frame.symbols.declare_parameter("varargs"))
+            macro_ref.accesses_varargs = True
+
+        return args
 
     def macro_def(self, macro_ref: MacroRef, frame: Frame) -> None:
         """Dump the macro definition for the def created by macro_body."""
@@ -1178,15 +1180,8 @@ class CodeGenerator(NodeVisitor):
         test_frame = frame.inner()
         else_frame = frame.inner()
 
-        # try to figure out if we have an extended loop.  An extended loop
-        # is necessary if the loop is in recursive mode if the special loop
-        # variable is accessed in the body if the body is a scoped block.
-        extended_loop = (
-            node.recursive
-            or "loop"
-            in find_undeclared(node.iter_child_nodes(only=("body",)), ("loop",))
-            or any(block.scoped for block in node.find_all(nodes.Block))
-        )
+        # Refactoring: delegate extended-loop shape analysis.
+        extended_loop = self._has_extended_loop(node)
 
         loop_ref = None
         if extended_loop:
@@ -1279,6 +1274,7 @@ class CodeGenerator(NodeVisitor):
         if node.else_:
             self.writeline(f"{iteration_indicator} = 0")
         self.outdent()
+
         self.leave_frame(
             loop_frame, with_python_scope=node.recursive and not node.else_
         )
@@ -1310,6 +1306,15 @@ class CodeGenerator(NodeVisitor):
         # loop from the top level
         if self._assign_stack:
             self._assign_stack[-1].difference_update(loop_frame.symbols.stores)
+
+    def _has_extended_loop(self, node: nodes.For) -> bool:
+        # Refactoring: keep loop analysis separate from generated output.
+        return (
+            node.recursive
+            or "loop"
+            in find_undeclared(node.iter_child_nodes(only=("body",)), ("loop",))
+            or any(block.scoped for block in node.find_all(nodes.Block))
+        )
 
     def visit_If(self, node: nodes.If, frame: Frame) -> None:
         if_frame = frame.soft()

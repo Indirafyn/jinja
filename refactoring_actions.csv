@@ -1,0 +1,10 @@
+filename,code element,line numbers,original code,refactored code,refactoring type
+src/jinja2/bccache.py,_get_default_cache_dir,210-251,"Repeated os.lstat ownership, mode, and directory checks","_validate_cache_dir(path) reused for both validation points","Extract Method"
+src/jinja2/compiler.py,CodeGenerator.macro_body,610-654,"Macro argument scanning and special caller/kwargs/varargs handling inline","_get_macro_args(node, frame, macro_ref)","Extract Method"
+src/jinja2/compiler.py,CodeGenerator.visit_For,1177-1318,"Extended-loop detection mixed into loop code generation","_has_extended_loop(node)","Extract Method"
+src/jinja2/environment.py,Environment.compile_templates,817-895,"Zip/folder setup and per-file writing inline","setup_output() returns writer and cleanup callbacks","Extract Method"
+src/jinja2/ext.py,InternationalizationExtension.parse,335-413,"Trans-tag header token parsing inline in parse","_parse_trans_args(parser) dedicated parsing phase","Extract Method"
+src/jinja2/filters.py,sync_do_groupby,1197-1287,"Attribute getter construction repeated in grouping logic","_groupby_key(environment, attribute, default, case_sensitive)","Extract Method"
+src/jinja2/runtime.py,Macro.__call__,680-721,"Macro positional, keyword, caller, kwargs, and varargs binding inline","_bind_args(args, kwargs)","Extract Method"
+src/jinja2/utils.py,urlize,230-344,"URL detection, punctuation balancing, and anchor rendering inline per word","_urlize_word(word, trim_url, rel_attr, target_attr, extra_schemes)","Extract Method"
+src/jinja2/loaders.py,PackageLoader.__init__,269-364,"Package root and zip archive resolution inline during initialization","_resolve_package_root(spec, package_name, package_path)","Extract Method"

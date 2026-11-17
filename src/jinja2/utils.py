@@ -227,6 +227,61 @@ _http_re = re.compile(
 _email_re = re.compile(r"^\S+@\w[\w.-]*\.\w+$")
 
 
+def _urlize_word(
+    word: str,
+    trim_url: t.Callable[[str], str],
+    rel_attr: str,
+    target_attr: str,
+    extra_schemes: t.Iterable[str] | None,
+) -> str:
+    # Refactoring: isolate URL detection and rendering for one word.
+    head, middle, tail = "", word, ""
+    match = re.match(r"^([(<]|&lt;)+", middle)
+    if match:
+        head = match.group()
+        middle = middle[match.end() :]
+
+    if middle.endswith((")", ">", ".", ",", "\n", "&gt;")):
+        match = re.search(r"([)>.,\n]|&gt;)+$", middle)
+        if match:
+            tail = match.group()
+            middle = middle[: match.start()]
+
+    for start_char, end_char in ("(", ")"), ("<", ">"), ("&lt;", "&gt;"):
+        start_count = middle.count(start_char)
+        if start_count <= middle.count(end_char):
+            continue
+        for _ in range(min(start_count, tail.count(end_char))):
+            end_index = tail.index(end_char) + len(end_char)
+            middle += tail[:end_index]
+            tail = tail[end_index:]
+
+    if _http_re.match(middle):
+        if middle.startswith(("https://", "http://")):
+            middle = f'<a href="{middle}"{rel_attr}{target_attr}>{trim_url(middle)}</a>'
+        else:
+            middle = (
+                f'<a href="https://{middle}"{rel_attr}{target_attr}>'
+                f"{trim_url(middle)}</a>"
+            )
+    elif middle.startswith("mailto:") and _email_re.match(middle[7:]):
+        middle = f'<a href="{middle}">{middle[7:]}</a>'
+    elif (
+        "@" in middle
+        and not middle.startswith("www.")
+        and not middle.startswith("@")
+        and ":" not in middle
+        and _email_re.match(middle)
+    ):
+        middle = f'<a href="mailto:{middle}">{middle}</a>'
+    elif extra_schemes is not None:
+        for scheme in extra_schemes:
+            if middle != scheme and middle.startswith(scheme):
+                middle = f'<a href="{middle}"{rel_attr}{target_attr}>{middle}</a>'
+
+    return f"{head}{middle}{tail}"
+
+
 def urlize(
     text: str,
     trim_url_limit: int | None = None,
@@ -283,69 +338,9 @@ def urlize(
     target_attr = f' target="{markupsafe.escape(target)}"' if target else ""
 
     for i, word in enumerate(words):
-        head, middle, tail = "", word, ""
-        match = re.match(r"^([(<]|&lt;)+", middle)
-
-        if match:
-            head = match.group()
-            middle = middle[match.end() :]
-
-        # Unlike lead, which is anchored to the start of the string,
-        # need to check that the string ends with any of the characters
-        # before trying to match all of them, to avoid backtracking.
-        if middle.endswith((")", ">", ".", ",", "\n", "&gt;")):
-            match = re.search(r"([)>.,\n]|&gt;)+$", middle)
-
-            if match:
-                tail = match.group()
-                middle = middle[: match.start()]
-
-        # Prefer balancing parentheses in URLs instead of ignoring a
-        # trailing character.
-        for start_char, end_char in ("(", ")"), ("<", ">"), ("&lt;", "&gt;"):
-            start_count = middle.count(start_char)
-
-            if start_count <= middle.count(end_char):
-                # Balanced, or lighter on the left
-                continue
-
-            # Move as many as possible from the tail to balance
-            for _ in range(min(start_count, tail.count(end_char))):
-                end_index = tail.index(end_char) + len(end_char)
-                # Move anything in the tail before the end char too
-                middle += tail[:end_index]
-                tail = tail[end_index:]
-
-        if _http_re.match(middle):
-            if middle.startswith("https://") or middle.startswith("http://"):
-                middle = (
-                    f'<a href="{middle}"{rel_attr}{target_attr}>{trim_url(middle)}</a>'
-                )
-            else:
-                middle = (
-                    f'<a href="https://{middle}"{rel_attr}{target_attr}>'
-                    f"{trim_url(middle)}</a>"
-                )
-
-        elif middle.startswith("mailto:") and _email_re.match(middle[7:]):
-            middle = f'<a href="{middle}">{middle[7:]}</a>'
-
-        elif (
-            "@" in middle
-            and not middle.startswith("www.")
-            # ignore values like `@a@b`
-            and not middle.startswith("@")
-            and ":" not in middle
-            and _email_re.match(middle)
-        ):
-            middle = f'<a href="mailto:{middle}">{middle}</a>'
-
-        elif extra_schemes is not None:
-            for scheme in extra_schemes:
-                if middle != scheme and middle.startswith(scheme):
-                    middle = f'<a href="{middle}"{rel_attr}{target_attr}>{middle}</a>'
-
-        words[i] = f"{head}{middle}{tail}"
+        words[i] = _urlize_word(
+            word, trim_url, rel_attr, target_attr, extra_schemes
+        )
 
     return "".join(words)
 

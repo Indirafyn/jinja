@@ -1194,6 +1194,21 @@ class _GroupTuple(t.NamedTuple):
         return tuple.__str__(self)
 
 
+def _groupby_key(
+    environment: "Environment",
+    attribute: str | int,
+    default: t.Any | None,
+    case_sensitive: bool,
+) -> t.Callable[[t.Any], t.Any]:
+    # Refactoring: centralize construction of the groupby sorting key.
+    return make_attrgetter(
+        environment,
+        attribute,
+        postprocess=ignore_case if not case_sensitive else None,
+        default=default,
+    )
+
+
 @pass_environment
 def sync_do_groupby(
     environment: "Environment",
@@ -1259,12 +1274,7 @@ def sync_do_groupby(
     .. versionchanged:: 2.6
         The attribute supports dot notation for nested access.
     """
-    expr = make_attrgetter(
-        environment,
-        attribute,
-        postprocess=ignore_case if not case_sensitive else None,
-        default=default,
-    )
+    expr = _groupby_key(environment, attribute, default, case_sensitive)
     out = [
         _GroupTuple(key, list(values))
         for key, values in groupby(sorted(value, key=expr), expr)
@@ -1286,12 +1296,7 @@ async def do_groupby(
     default: t.Any | None = None,
     case_sensitive: bool = False,
 ) -> "list[_GroupTuple]":
-    expr = make_attrgetter(
-        environment,
-        attribute,
-        postprocess=ignore_case if not case_sensitive else None,
-        default=default,
-    )
+    expr = _groupby_key(environment, attribute, default, case_sensitive)
     out = [
         _GroupTuple(key, await auto_to_list(values))
         for key, values in groupby(sorted(await auto_to_list(value), key=expr), expr)

@@ -336,58 +336,15 @@ class InternationalizationExtension(Extension):
         """Parse a translatable tag."""
         lineno = next(parser.stream).lineno
 
-        context = None
-        context_token = parser.stream.next_if("string")
-
-        if context_token is not None:
-            context = context_token.value
-
-        # find all the variables referenced.  Additionally a variable can be
-        # defined in the body of the trans block too, but this is checked at
-        # a later state.
-        plural_expr: nodes.Expr | None = None
-        plural_expr_assignment: nodes.Assign | None = None
-        num_called_num = False
-        variables: dict[str, nodes.Expr] = {}
-        trimmed = None
-        while parser.stream.current.type != "block_end":
-            if variables:
-                parser.stream.expect("comma")
-
-            # skip colon for python compatibility
-            if parser.stream.skip_if("colon"):
-                break
-
-            token = parser.stream.expect("name")
-            if token.value in variables:
-                parser.fail(
-                    f"translatable variable {token.value!r} defined twice.",
-                    token.lineno,
-                    exc=TemplateAssertionError,
-                )
-
-            # expressions
-            if parser.stream.current.type == "assign":
-                next(parser.stream)
-                variables[token.value] = var = parser.parse_expression()
-            elif trimmed is None and token.value in ("trimmed", "notrimmed"):
-                trimmed = token.value == "trimmed"
-                continue
-            else:
-                variables[token.value] = var = nodes.Name(token.value, "load")
-
-            if plural_expr is None:
-                if isinstance(var, nodes.Call):
-                    plural_expr = nodes.Name("_trans", "load")
-                    variables[token.value] = plural_expr
-                    plural_expr_assignment = nodes.Assign(
-                        nodes.Name("_trans", "store"), var
-                    )
-                else:
-                    plural_expr = var
-                num_called_num = token.value == "num"
-
-        parser.stream.expect("block_end")
+        # Refactoring: move trans-tag header parsing into a dedicated phase.
+        (
+            context,
+            plural_expr,
+            plural_expr_assignment,
+            num_called_num,
+            variables,
+            trimmed,
+        ) = self._parse_trans_args(parser)
 
         plural = None
         have_plural = False
@@ -453,6 +410,68 @@ class InternationalizationExtension(Extension):
             return [plural_expr_assignment, node]
         else:
             return node
+
+    def _parse_trans_args(
+        self, parser: "Parser"
+    ) -> tuple[
+        str | None,
+        nodes.Expr | None,
+        nodes.Assign | None,
+        bool,
+        dict[str, nodes.Expr],
+        bool | None,
+    ]:
+        context_token = parser.stream.next_if("string")
+        context = context_token.value if context_token is not None else None
+        plural_expr: nodes.Expr | None = None
+        plural_expr_assignment = None
+        num_called_num = False
+        variables: dict[str, nodes.Expr] = {}
+        trimmed = None
+
+        while parser.stream.current.type != "block_end":
+            if variables:
+                parser.stream.expect("comma")
+            if parser.stream.skip_if("colon"):
+                break
+
+            token = parser.stream.expect("name")
+            if token.value in variables:
+                parser.fail(
+                    f"translatable variable {token.value!r} defined twice.",
+                    token.lineno,
+                    exc=TemplateAssertionError,
+                )
+
+            if parser.stream.current.type == "assign":
+                next(parser.stream)
+                variables[token.value] = var = parser.parse_expression()
+            elif trimmed is None and token.value in ("trimmed", "notrimmed"):
+                trimmed = token.value == "trimmed"
+                continue
+            else:
+                variables[token.value] = var = nodes.Name(token.value, "load")
+
+            if plural_expr is None:
+                if isinstance(var, nodes.Call):
+                    plural_expr = nodes.Name("_trans", "load")
+                    variables[token.value] = plural_expr
+                    plural_expr_assignment = nodes.Assign(
+                        nodes.Name("_trans", "store"), var
+                    )
+                else:
+                    plural_expr = var
+                num_called_num = token.value == "num"
+
+        parser.stream.expect("block_end")
+        return (
+            context,
+            plural_expr,
+            plural_expr_assignment,
+            num_called_num,
+            variables,
+            trimmed,
+        )
 
     def _trim_whitespace(self, string: str, _ws_re: t.Pattern[str] = _ws_re) -> str:
         return _ws_re.sub(" ", string.strip())
