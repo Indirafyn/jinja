@@ -716,17 +716,18 @@ class Macro:
         else:
             autoescape = self._default_autoescape
 
-        # try to consume the positional arguments
+        arguments = self._bind_args(args, kwargs)
+
+        return self._invoke(arguments, autoescape)
+
+    def _bind_args(
+        self, args: tuple[t.Any, ...], kwargs: dict[str, t.Any]
+    ) -> list[t.Any]:
+        # Refactoring: isolate macro positional, keyword, and special-argument binding.
         arguments = list(args[: self._argument_count])
         off = len(arguments)
-
-        # For information why this is necessary refer to the handling
-        # of caller in the `macro_body` handler in the compiler.
         found_caller = False
 
-        # if the number of arguments consumed is not the number of
-        # arguments expected we start filling in keyword arguments
-        # and defaults.
         if off != self._argument_count:
             for name in self.arguments[len(arguments) :]:
                 try:
@@ -739,9 +740,6 @@ class Macro:
         else:
             found_caller = self.explicit_caller
 
-        # it's important that the order of these arguments does not change
-        # if not also changed in the compiler's `function_scoping` method.
-        # the order is caller, keyword arguments, positional arguments!
         if self.caller and not found_caller:
             caller = kwargs.pop("caller", None)
             if caller is None:
@@ -767,7 +765,7 @@ class Macro:
                 f" {len(self.arguments)} argument(s)"
             )
 
-        return self._invoke(arguments, autoescape)
+        return arguments
 
     async def _async_invoke(self, arguments: list[t.Any], autoescape: bool) -> str:
         rv = await self._func(*arguments)  # type: ignore

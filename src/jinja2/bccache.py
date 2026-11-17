@@ -214,6 +214,16 @@ class FileSystemBytecodeCache(BytecodeCache):
                 "need to explicitly provide one."
             )
 
+        def _validate_cache_dir(path: str) -> None:
+            # Refactoring: centralize the repeated cache-directory validation.
+            path_stat = os.lstat(path)
+            if (
+                path_stat.st_uid != os.getuid()
+                or not stat.S_ISDIR(path_stat.st_mode)
+                or stat.S_IMODE(path_stat.st_mode) != stat.S_IRWXU
+            ):
+                _unsafe_dir()
+
         tmpdir = tempfile.gettempdir()
 
         # On windows the temporary directory is used specific unless
@@ -233,24 +243,12 @@ class FileSystemBytecodeCache(BytecodeCache):
                 raise
         try:
             os.chmod(actual_dir, stat.S_IRWXU)
-            actual_dir_stat = os.lstat(actual_dir)
-            if (
-                actual_dir_stat.st_uid != os.getuid()
-                or not stat.S_ISDIR(actual_dir_stat.st_mode)
-                or stat.S_IMODE(actual_dir_stat.st_mode) != stat.S_IRWXU
-            ):
-                _unsafe_dir()
+            _validate_cache_dir(actual_dir)
         except OSError as e:
             if e.errno != errno.EEXIST:
                 raise
 
-        actual_dir_stat = os.lstat(actual_dir)
-        if (
-            actual_dir_stat.st_uid != os.getuid()
-            or not stat.S_ISDIR(actual_dir_stat.st_mode)
-            or stat.S_IMODE(actual_dir_stat.st_mode) != stat.S_IRWXU
-        ):
-            _unsafe_dir()
+        _validate_cache_dir(actual_dir)
 
         return actual_dir
 
